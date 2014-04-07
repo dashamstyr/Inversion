@@ -1,4 +1,4 @@
-def addnoise(P_in,background = 0,stdev = []):
+def backandnoise(P_in,background = 0,stdev = []):
     #Adds gaussian random noise and background signal to any profile
     #if no standard deviation is defined, the noise added is standard
     #shot noise - poisson distrobution approximated by a gaussian with
@@ -6,18 +6,17 @@ def addnoise(P_in,background = 0,stdev = []):
     
     import numpy as np
     import random
-    from copy import deepcopy
     
-    P_out = deepcopy(P_in)
+    P_out = P_in+background
     
     if stdev:
-        for n in range(len(P_out.vals)):
-            P_out.vals[n] = P_out.vals[n] + random.gauss(background,stdev)
+        for n in range(len(P_in)):
+            P_out[n] = P_out[n] + random.gauss(background,stdev)
             #print random.gauss(background,stdev)
     else:
-        for n in range(len(P_out.vals)):
-            stdev = np.sqrt(P_out.vals[n]+background)
-            P_out.vals[n] = P_out.vals[n] + random.gauss(background,stdev)
+        for n in range(len(P_in)):
+            stdev = np.sqrt(P_in[n]+background)
+            P_out[n] = P_in[n] + random.gauss(background,stdev)
 
     return P_out
 
@@ -38,12 +37,12 @@ def background_subtract(P_in):
     #select data from altitudes higher than z_min and muliply full signal by
     #range squared, if this gives less than 500 values, take uppermost 500
 
-    z = P_out.z[np.where(P_out.z >= z_min)]
+    z = P_out.index[z_min:]
 
     if len(z) <= 500:
         z = P_out.z[-500:]
 
-    r_sq = P_out.vals[-len(z):]*z**2
+    r_sq = P_out.values[-len(z):]*z**2
 
     #since background is constant while signal is reduced as z^2, first
     #coefficient is equal to background
@@ -126,68 +125,25 @@ def numdiff_d2(m_in,x):
 
     return dm_dx
 
-def raman_analytical(P_in,u = 1.0):
-    #Uses analytical inversion of Raman scattering equation to calculate values
-    #for particulate extinction from background-subtracted signal
-
-    import numpy as np
-
-    #fisrt perform background subtraction on the profile if it hasn't already happened
-
-    if P_in.backsub_vals:
-        from copy import deepcopy
-        P_out = deepcopy(P_in)
-    else:
-        P_out = background_subtract(P_in)
     
-    #now calculate an intermediate value x to be differentiated
-    
-    x = np.log(P_out.n_N2/(P_out.vals*P_out.z**2))
-
-    x_diff = numdiff_d1(x,P_out.z)
-
-    #estimate particulate extinction coefficient using equation from Kovalev eq 11.6 from pg.394
-
-    alpha_p0 = (x_diff - P_out.alpha_m0 - P_out.alpha_mr)/(1+(P_out.wave_0/P_out.wave_r)**u)
-
-    P_out.alpha_p0 = alpha_p0
-
-    #use this to determine the rest of the extinction terms
-
-    P_out.alpha_pr = alpha_p0*(P_out.wave_0/P_out.wave_r)**u
-
-    P_out.alpha_t0 = P_out.alpha_p0 + P_out.alpha_m0
-    P_out.alpha_tr = P_out.alpha_pr + P_out.alpha_mr
-
-    #calculate estimated signal based on this value of alpha_p0
-
-    T_total = 1.0
-    P_out.backsub_vals[0] = P_out.z**-2*P_out.n_N2[0]*T_total
-    for n in range(1,len(P_out.z)):
-        T_step = np.exp(-(alpha_t0[n] + alpha_tr[n])*(P_out.z[n]-P_out.z[n-1]))
-        T_total = T_total*T_step
-        P_out.backsub_vals[n] = P_out.z[n]**-2*P_out.n_N2[n]*T_total
-
-    return P_out
-    
-def SNR_calc(P_in):
+def SNR_1D(P_in,winsize=10):
     #estimates signal to noise ratio from an input profile
     #as a function of altitude using a sliding window of 100 pixels assuming for this local section
-    #a polynomial curve fit is acceptable to fit the mean value
+    #a second-order polynomial curve fit is acceptable to fit the mean value
     
     import numpy as np
 
-    z = P_in.z
+    z = P_in.index.values
     
     try:
-        vals = P_in.vals
+        vals = P_in.values
     except AttributeError:
         print 'Warning: Background subtraction has not been performed prior to SNR calculation'
-        vals = P_in.vals
-    
-    winsize = 5
+        vals = P_in.values
     
     stdev = np.empty_like(vals)
+    
+    #create buffer around 
     
     for n in range(len(vals)-winsize):
         z_win = z[n:(n+winsize)]
@@ -208,7 +164,169 @@ def SNR_calc(P_in):
     return SNR
 
 
-#def avgnoise(signum,SNR_out):
+def SNR_2D (dfin,boxsize = (10,10)):
+    import pandas as pan
+    import numpy as np
+    """
+    inputs:
+    dfin = a pandas dataframe
+    boxsize=(10,10)  a tuple defining the size of the box to calculate in (x,y)
+    
+    Takes in a pandas dataframe and generates a dataframe of the same size containing
+    2-D signal to noise ratio calculations.
+    """
+    
+    #create buffer around dataframe
+    data = dfin.values
+    (rows,columns) = dfin.shape
+    newsize = (rows+boxsize[0],columns+boxsize[1])
+    newarray = np.empty(newsize)
+    (newrows,newcolums) = newarray.shape
+    
+    l = int(np.ceil(boxsize[0]/2))
+    r = boxsize[0]-leftbuffer
+    t = int(np.ceil(boxsize[1]/2))
+    b = boxsize[1]-topbuffer
+    
+    #create buffered array for calculating mean and std
+    
+    newarray[:l,t:-b] = data[:l,:]
+    newarray[l:-r,t:-b] = data
+    newarray[-r:,t:-b] = data[-r:,:]
+    newarray[:,:t] = newarray[:,t:2*t]
+    newarray[:,-b:] = newarray[:,-2*b:-b]
+    
+    #calculate SNR from mean and std
+    SNRout = np.empty_like(data)
+    for r in range(rows):
+        for c in range(columns):
+            window = newarray[r:r+boxsize[0],c:c+boxsize[1]]
+            tempmean = np.mean(window)
+            tempstd = np.std(window)
+            SNRout[r,c] = tempmean/tempstd    
+    
+    dfout = pan.DataFrame(data = SNRout, index = dfin.index, columns = dfin.coulmns)
+    
+    return dfout
+
+def calc_slope(prof, winsize = 10):
+    import pandas as pan
+    import numpy as np
+    """
+    Calculates slope of data for a single profile using a smoothing window of
+    predetermined size
+    
+    inputs:
+    prof:  a pandas series where index is altitude
+    n:  number of consecutive values to average
+    
+    output:
+    slopeout: output series,same size as input,with profile slopes
+    """
+    data = prof.values
+    altrange = np.asarray(prof.index.values,dtype='float')
+    
+    #Step 1: pad dataset to allow averaging
+    
+    leftpad = np.int(np.floor(winsize/2))
+    rightpad = winsize-leftpad
+      
+    #Step 2: Calculate a linear fit to the data in the window
+    
+    slopes = np.empty(len(data)-winsize)
+    for n in range(len(slopes)):       
+        x = altrange[n:n+winsize]
+        y = data[n:n+winsize]
+        
+        coeffs = np.polyfit(x,y,1,full=False)
+        slopes[n] = coeffs[0]
+        
+    
+    slopes = np.pad(slopes,(leftpad,rightpad),'edge')
+    
+    slope_out = pan.Series(slopes, index=altrange)
+    
+    
+    return slope_out
+
+
+def boundary_layer_detect(dfin, algo="slope",slope_thresh=[],val_thresh=[],numvals=1,maxalt=2000):
+    """
+    Approximates the edge of the boundary layer using some combination
+    of three algorithms:
+    1) Negative slope threshold:  this defines the boundary layer as the lowest
+    altitude the exceeds some negative slope threshold
+    2) Value threshold:  this defines the top of the boundary layer as the lowest altitude
+    for which the NRB dips below a value threshold
+    3) Combination threshold:  Uses a combinaiton of the above two methods
+    
+    Inputs:
+    dfin - A pandas dataframe containing a series of lidar profileswith altitude as the index
+            and datetime as the column names
+    algo - a string determining which algorithms to use.  Can be either:
+            "slope" - purely slope threshold
+            "value" - purely NRB threshold
+            "combo" - combined algorithm
+    slope_thresh - a floating point number defining the minimum slope to be used in the slope algorithm
+    val_thresh - a floating point number defining the value threshold for the NRB value algorithm
+    numvals - the number of consecutive values that must be below the slope or value threshold in order to be counted
+    maxalt - an altitude in meters above which the algorithm is not longer applied
+    
+    Outputs:
+    BL_out - a pandas series with datetime index and a boundary layer altitude in meters
+    """
+    import pandas as pan
+    from itertools import groupby
+    from operator import itemgetter
+    
+    
+    BL_out = pan.Series(index = dfin.columns)
+    
+    if algo=="slope":
+        for c in dfin.columns:
+            tempslope = calc_slope(dfin[c])
+            tempslope = tempslope.ix[:maxalt]
+            for k,g in groupby(enumerate(tempslope), lambda(i,s):s>=slope_thresh):
+                temp = map(itemgetter(1),g)
+                if len(temp) >= numvals:
+                    BL_out[c] = temp[0]
+                    break
+    
+    if algo=="value":
+        for c in dfin.columns:
+            tempvals = dfin[c].ix[:maxalt]
+            for k,g in groupby(enumerate(tempvals), lambda(i,v):v<=val_thresh):
+                temp = map(itemgetter(1),g)
+                if len(temp) >= numvals:
+                    BL_out[c] = temp[0]
+                    break
+    
+    if algo=="combo":
+        for c in dfin.columns:
+            tempslope = calc_slope(dfin[c])
+            tempslope = tempslope.ix[:maxalt]
+            tempvals = dfin[c].ix[:maxalt]
+            for k,g in groupby(enumerate(tempslope), lambda(i,d):d[0]>=slope_thresh or d[1]<=val_thresh):
+                temp = map(itemgetter(1),g)
+                if len(temp) >= numvals:
+                    BL_out[c] = temp[0]
+                    break 
+    
+    BL_out.fillna(maxalt)
+    
+    return BL_out
+    
+#def layer_detect(dfin, algo="slope",slope_thresh=[],val_thresh=[],numvals=1,altrange=[]):
+    """
+    Takes a pandas series showing a lidar profile and uses a combination of
+    slopes and threshold levels to detect feature edges
+    
+    inputs:
+    dfin: a pandas dataframe wit datetime index and altitude columns
+    slope=[]: if slope is defined, this value is used as the threshold slope to demarcate layers
+    thresold=[] if 
+    
+    """
     
 if __name__== "__main__":
 
@@ -291,5 +409,4 @@ if __name__== "__main__":
 
     plt.show()
     
-   
     
