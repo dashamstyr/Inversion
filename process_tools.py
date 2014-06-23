@@ -1,26 +1,37 @@
-def backandnoise(P_in,background = 0,stdev = []):
-    #Adds gaussian random noise and background signal to any profile
-    #if no standard deviation is defined, the noise added is standard
-    #shot noise - poisson distrobution approximated by a gaussian with
-    #std = sqrt(signal)
+def backandnoise(P_in,background = 0,stdev = [],inplace=True):
+    """
+    Adds gaussian random noise and background signal to any profile
+    
+    Inputs:
+    P_in = a pandas series with altitude index
+    background = a float defining the backgorund signal to be applied(defaults to 0)
+    stdev = the standard deviation of the gaussian noise component
+    
+    if no standard deviation is defined, the noise added is standard
+    shot noise - poisson distribution approximated by a gaussian with
+    std = sqrt(signal)
+    
+    Outputs:
+    P_out = a copy of P_in with background signal and noise applied
+    """
     
     import numpy as np
     import random
+    from copy import deepcopy
     
-    P_out = P_in+background
+    if inplace:
+        P_out = P_in
+    else:
+        P_out=deepcopy(P_in)
     
     if stdev:
-        for n in range(len(P_in)):
-            P_out[n] = P_out[n] + random.gauss(background,stdev)
-            #print random.gauss(background,stdev)
+        P_out.values[:] = [v+random.gauss(background,stdev) for v in P_out.values]
     else:
-        for n in range(len(P_in)):
-            stdev = np.sqrt(P_in[n]+background)
-            P_out[n] = P_in[n] + random.gauss(background,stdev)
-
+        P_out.values[:] = [v+random.gauss(background,np.sqrt(v+background)) for v in P_out.values]
     return P_out
 
-def background_subtract(P_in):
+def background_subtract(P_in,back_avg=[],z_min=6000):
+    #subtracts background from signal, without background
     #takes advantage of inverse square law to calculate background signal for
     #a profile
 
@@ -32,28 +43,29 @@ def background_subtract(P_in):
 
     P_out = deepcopy(P_in)
     
-    z_min = 6000 #[m]
-
-    #select data from altitudes higher than z_min and muliply full signal by
-    #range squared, if this gives less than 500 values, take uppermost 500
-
-    z = P_out.index[z_min:]
-
-    if len(z) <= 500:
-        z = P_out.z[-500:]
-
-    r_sq = P_out.values[-len(z):]*z**2
-
-    #since background is constant while signal is reduced as z^2, first
-    #coefficient is equal to background
+    if back_avg:
+        P_out.values=P_out.values-back_avg
+    else:    
+        #select data from altitudes higher than z_min and muliply full signal by
+        #range squared, if this gives less than 500 values, take uppermost 500
     
-    coeffs = np.polyfit(z,r_sq,2,full=False)
+        z = P_out.index[z_min:]
     
-
-    background = coeffs[0]
-
-    P_out.backsub_vals = P_out.vals-background
-    P_out.back = background
+        if len(z) <= 500:
+            z = P_out.z[-500:]
+    
+        r_sq = P_out.values[-len(z):]*z**2
+    
+        #since background is constant while signal is reduced as z^2, first
+        #coefficient is equal to background
+        
+        coeffs = np.polyfit(z,r_sq,2,full=False)
+        
+    
+        background = coeffs[0]
+    
+        P_out.backsub_vals = P_out.vals-background
+        P_out.back = background
 
     return P_out
 
@@ -125,89 +137,9 @@ def numdiff_d2(m_in,x):
 
     return dm_dx
 
-    
-def SNR_1D(P_in,winsize=10):
-    #estimates signal to noise ratio from an input profile
-    #as a function of altitude using a sliding window of 100 pixels assuming for this local section
-    #a second-order polynomial curve fit is acceptable to fit the mean value
-    
-    import numpy as np
-
-    z = P_in.index.values
-    
-    try:
-        vals = P_in.values
-    except AttributeError:
-        print 'Warning: Background subtraction has not been performed prior to SNR calculation'
-        vals = P_in.values
-    
-    stdev = np.empty_like(vals)
-    
-    #create buffer around 
-    
-    for n in range(len(vals)-winsize):
-        z_win = z[n:(n+winsize)]
-        v_win = vals[n:(n+winsize)]
-    
-        coeffs = np.polyfit(z_win,v_win,2,full=False)
-        
-        baseline = coeffs[0]*z_win**2 + coeffs[1]*z_win + coeffs[2]
-        
-        noise = v_win-baseline
-        
-        stdev[n] = np.std(noise)
-        
-    stdev[n:] = stdev[n]
-    
-    SNR = vals/stdev
-    
-    return SNR
 
 
-def SNR_2D (dfin,boxsize = (10,10)):
-    import pandas as pan
-    import numpy as np
-    """
-    inputs:
-    dfin = a pandas dataframe
-    boxsize=(10,10)  a tuple defining the size of the box to calculate in (x,y)
-    
-    Takes in a pandas dataframe and generates a dataframe of the same size containing
-    2-D signal to noise ratio calculations.
-    """
-    
-    #create buffer around dataframe
-    data = dfin.values
-    (rows,columns) = dfin.shape
-    newsize = (rows+boxsize[0],columns+boxsize[1])
-    newarray = np.empty(newsize)
-    (newrows,newcolums) = newarray.shape
-    
-    l = int(np.ceil(boxsize[0]/2))
-    r = boxsize[0]-leftbuffer
-    t = int(np.ceil(boxsize[1]/2))
-    b = boxsize[1]-topbuffer
-    
-    #create buffered array for calculating mean and std
-    
-    newarray[:l,t:-b] = data[:l,:]
-    newarray[l:-r,t:-b] = data
-    newarray[-r:,t:-b] = data[-r:,:]
-    newarray[:,:t] = newarray[:,t:2*t]
-    newarray[:,-b:] = newarray[:,-2*b:-b]
-    
-    #calculate SNR from mean and std
-    SNRout = np.empty_like(data)
-    for r in range(rows):
-        for c in range(columns):
-            window = newarray[r:r+boxsize[0],c:c+boxsize[1]]
-            tempmean = np.mean(window)
-            tempstd = np.std(window)
-            SNRout[r,c] = tempmean/tempstd    
-    
-    dfout = pan.DataFrame(data = SNRout, index = dfin.index, columns = dfin.coulmns)
-    
-    return dfout
+
 
 def calc_slope(prof, winsize = 10):
     import pandas as pan
@@ -249,6 +181,34 @@ def calc_slope(prof, winsize = 10):
     
     return slope_out
 
+def calc_SNR(prof,bg=[],bg_alt=[]):
+    import pandas as pan
+    import numpy as np
+    """
+    inputs:
+    prof = a pandas series
+    bg = background signal level (stray light + dark current)
+    bg_alt = altitude above which signal is assumed to be purely background
+             if empty, topmost 100 data points are used1
+    
+    Calculates signal to noise ratios for mpl data
+    """
+        
+    if not bg_alt:
+        bg_alt=prof.index[-100]
+    if not bg:
+        bg = np.mean(prof.ix[bg_alt])
+    
+    SNRprof=pan.Series(np.empty_like(prof.values),index=prof.index)
+    tempvals=[v for v,r in zip(prof.values,prof.index) if r>=bg_alt]
+    tempfilt=[x for x in tempvals if not np.isnan(x)]
+    sigmatemp=np.std(tempfilt)
+    Ctemp=sigmatemp/np.mean(np.sqrt(np.abs(tempfilt)))
+    SNR = lambda x: (x-bg)/(Ctemp*np.sqrt(np.abs(x)))
+        
+    SNRprof[:]=np.array([SNR(v) for v in prof.values]).clip(0)
+        
+    return SNRprof
 
 def boundary_layer_detect(dfin, algo="slope",slope_thresh=[],val_thresh=[],numvals=1,maxalt=2000):
     """
@@ -316,17 +276,69 @@ def boundary_layer_detect(dfin, algo="slope",slope_thresh=[],val_thresh=[],numva
     
     return BL_out
     
-#def layer_detect(dfin, algo="slope",slope_thresh=[],val_thresh=[],numvals=1,altrange=[]):
+def maxmin(arrayin,widths,f):
+    #find all local maxima or minina from each row of an array and return array
+    #of index values for each max or min
+    from scipy import signal
+    arrayout=[]
+    for n in range(len(arrayin)):
+        temp=signal.argrelextrema(arrayin[n],f)[0]        
+        for t in temp:
+            arrayout.append((widths[n],t))
+        
+    return arrayout
+
+def layer_filter(prof,maxiloc,miniloc,sigma0=[],thresh=3):
     """
-    Takes a pandas series showing a lidar profile and uses a combination of
-    slopes and threshold levels to detect feature edges
+    takes in an array of minima and maxima from CWT for a profile and calculates
+    layer edges and peaks while filtering out peaks for which the delta from 
+    edge to peak is less than some multiple of the shot noise from background and
+    dark current
     
     inputs:
-    dfin: a pandas dataframe wit datetime index and altitude columns
-    slope=[]: if slope is defined, this value is used as the threshold slope to demarcate layers
-    thresold=[] if 
+    prof - a pandas series represeting a single profile of lidar returns with altitude
+    maxix - a list of maximum index values from the CWT results at a given wavelet width
+            represent the peaks of a given layer
+    minix - a list of minimum index values from the CWT results at a given wavelet width
+            represnt the edges of a given layer
+    sigma0 - baeline noise level for the profile, if empty it is calculated
+    thresh - difference between peak and edge of a layer must exvceeed this multiple of sigma0 to be counted
     
     """
+    #step 1:calculate noise floor, if not defined
+
+    if not sigma0:
+        SNRprof=calc_SNR(prof)
+        sigma0=np.mean(SNRprof.values[-100:])
+    #Step 2: Calculate profile values at each edge and peak
+    layers=[]
+    for peakloc in maxiloc:
+        try:
+            edge_below=[v for v in miniloc if v<peakloc][-1]
+        except IndexError:
+            continue
+        edge_above_list=[v for v in miniloc if v>peakloc]
+        if not edge_above_list:
+            continue
+        #Step 3: Calculate delta signal between peak and lower edge (directly before)
+        delta_lower=prof.iloc[peakloc]-prof.iloc[edge_below]
+        
+        #Step 4: Filter out false layers for which delta < thresh*signam0
+        if delta_lower>thresh*sigma0:
+            #try to find upper edge where delta_upper exceeds threshold
+            for e in edge_above_list:
+                delta_upper=prof.iloc[peakloc]-prof.iloc[e]
+                if delta_upper>thresh*sigma0:
+                    edge_above=e
+                    #if upper edge is found, add indices of (lower,center,upper) to layers
+                    layers.append((edge_below,peakloc,edge_above))
+                    break
+    #Step 5: Return list of tuples where each element is ()   
+    return layers
+
+
+    
+    
     
 if __name__== "__main__":
 

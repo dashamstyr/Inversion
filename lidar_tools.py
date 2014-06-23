@@ -173,7 +173,7 @@ def molprof(z,wave, T_0 = 1.0):
     return P_out
 
 
-def addlayer(P_in, layer, lrat):
+def addlayer(P_in, layer, lrat, inplace=True):
     """
     Function that adds a layer of known backscatter coefficient
     and lidar ratio onto an existing lidar response profile
@@ -192,7 +192,10 @@ def addlayer(P_in, layer, lrat):
     import numpy as np
     from copy import deepcopy
     
-    P_out = deepcopy(P_in)
+    if inplace:
+        P_out=P_in
+    else:
+        P_out = deepcopy(P_in)
     
     beta_in = layer.values
     z_in = np.array(layer.index.values,dtype='float64')
@@ -203,22 +206,22 @@ def addlayer(P_in, layer, lrat):
     z_old = z_min
     for z in P_out.columns:
         if z < z_min:
-            T_total = (P_out.loc['vals'][z]/P_out.loc['vals'].iloc[0])* \
-            (P_out.loc['beta_t'].iloc[0]/P_out.loc['beta_t'][z])* \
+            T_total = (P_out.loc['vals',z]/P_out.loc['vals'].iloc[0])* \
+            (P_out.loc['beta_t'].iloc[0]/P_out.loc['beta_t',z])* \
             (z/P_out.columns[0])**2
         elif z <= z_max:
-            P_out.loc['beta_p'][z] = P_out.loc['beta_p'][z] + np.interp(z,z_in,beta_in)
-            P_out.loc['alpha_p'][z] = P_out.loc['alpha_p'][z] + P_out.loc['beta_p'][z]*lrat
-            P_out.loc['beta_t'][z] = P_out.loc['beta_p'][z] + P_out.loc['beta_R'][z]
-            P_out.loc['alpha_t'][z] = P_out.loc['alpha_p'][z] + P_out.loc['alpha_R'][z]
-            T_step = np.exp(-P_out.loc['alpha_t'][z]*(z-z_old))
+            P_out.loc['beta_p',z] += np.interp(z,z_in,beta_in)
+            P_out.loc['alpha_p',z] += P_out.loc['beta_p',z]*lrat
+            P_out.loc['beta_t',z] = P_out.loc['beta_p',z] + P_out.loc['beta_R',z]
+            P_out.loc['alpha_t',z] = P_out.loc['alpha_p',z] + P_out.loc['alpha_R',z]
+            T_step = np.exp(-P_out.loc['alpha_t',z]*(z-z_old))
             T_total = T_total*T_step
-            P_out.loc['vals'][z] = z**-2*P_out.loc['beta_t'][z]*T_total**2
+            P_out.loc['vals',z] = z**-2*P_out.loc['beta_t',z]*T_total**2
             z_old = z
         else:
-            T_step = np.exp(-P_out.loc['alpha_t'][z]*(z-z_old))
+            T_step = np.exp(-P_out.loc['alpha_t',z]*(z-z_old))
             T_total = T_total*T_step
-            P_out.loc['vals'][z] = z**-2*P_out.loc['beta_t'][z]*T_total**2
+            P_out.loc['vals',z] = z**-2*P_out.loc['beta_t',z]*T_total**2
             z_old=z
 
     return P_out
@@ -276,14 +279,14 @@ def fernald(P_in, lrat, wave = 532, E = 1.0, calrange = []):
         for alt in reversed(altitudes):
             if alt == altitudes[-1]:
                 #at calibration altitude assume no aerosols
-                beta_total.loc[alt] = Rayleigh_coeffs.loc['beta_R'][alt]
+                beta_total.loc[alt] = Rayleigh_coeffs.loc['beta_R',alt]
                 oldalt = alt
             
             else:
                 X1 = P_in.loc[oldalt]*E
                 X0 = P_in.loc[alt]*E
-                beta_R1 = Rayleigh_coeffs.loc['beta_R'][oldalt]
-                beta_R0 = Rayleigh_coeffs.loc['beta_R'][alt]
+                beta_R1 = Rayleigh_coeffs.loc['beta_R',oldalt]
+                beta_R0 = Rayleigh_coeffs.loc['beta_R',alt]
                 delta_Z = oldalt-alt
                 A = (lrat-Rayleigh_lrat)*(beta_R1+beta_R0)*delta_Z
                 
@@ -299,7 +302,7 @@ def fernald(P_in, lrat, wave = 532, E = 1.0, calrange = []):
         calalts = [z for z in altitudes if minalt < z < maxalt]
         
         for alt in calalts:
-            beta_total.loc[alt] = Rayleigh_coeffs.loc['beta_R'][alt]
+            beta_total.loc[alt] = Rayleigh_coeffs.loc['beta_R',alt]
         
         #next calculate coefficients for range below minalt
         if calalts[0] > altitudes[0]:
@@ -309,8 +312,8 @@ def fernald(P_in, lrat, wave = 532, E = 1.0, calrange = []):
             for alt in reversed(below):
                 X1 = P_in.loc[oldalt]*E
                 X0 = P_in.loc[alt]*E
-                beta_R1 = Rayleigh_coeffs.loc['beta_R'][oldalt]
-                beta_R0 = Rayleigh_coeffs.loc['beta_R'][alt]
+                beta_R1 = Rayleigh_coeffs.loc['beta_R',oldalt]
+                beta_R0 = Rayleigh_coeffs.loc['beta_R',alt]
                 delta_Z = oldalt-alt
                 A = (lrat-Rayleigh_lrat)*(beta_R1+beta_R0)*delta_Z
                 
@@ -327,8 +330,8 @@ def fernald(P_in, lrat, wave = 532, E = 1.0, calrange = []):
             for alt in above:
                 X1 = P_in.loc[oldalt]*E
                 X0 = P_in.loc[alt]*E
-                beta_R1 = Rayleigh_coeffs.loc['beta_R'][oldalt]
-                beta_R0 = Rayleigh_coeffs.loc['beta_R'][alt]
+                beta_R1 = Rayleigh_coeffs.loc['beta_R',oldalt]
+                beta_R0 = Rayleigh_coeffs.loc['beta_R',alt]
                 delta_Z = oldalt-alt
                 A = (lrat-Rayleigh_lrat)*(beta_R1+beta_R0)*delta_Z
                 
@@ -341,6 +344,26 @@ def fernald(P_in, lrat, wave = 532, E = 1.0, calrange = []):
 
 
 def klett(P_in,r_m,lrat,sigma_m,k=1):
+    """
+    Function that calculates backscatter and extinction coefficients based on
+    variable lidar ratios using the Klett algorithm 
+    
+    Inputs:
+    P_in = a pandas series with values of signal strength and altitude index
+    r_m = the reference altitude - maximum altitude for which calculations are done
+            and the point at which the extinction coefficeint is assumed ot be known
+    lrat = a Pandas series with values of lidar ratio and altitude index
+    sigma_m = the extinction coefficient at altitude r_m
+    k = the power coefficient in the power law relationship bwetween backscatter
+        and extinction (defaults to 1)
+        
+    Outputs:
+    beta = pandas series of backscatter coefficients
+    sigma = pandas series of extinction coefficients
+    
+    """
+    
+    
     import numpy as np
     import pandas as pan
 
@@ -368,7 +391,7 @@ def klett(P_in,r_m,lrat,sigma_m,k=1):
         else:
             X1 = (lrat.loc[oldalt]/lrat.loc[alt])**(1/k)   
             sigma.loc[alt] = X1*np.exp((P_new.loc[alt]-P_new.loc[oldalt])/k)/ \
-            (sigma.loc[oldalt]**-1+(1.0/k)*(1+X1*np.exp((P_new[alt]-P_new[oldalt])/k))*(oldalt-alt))
+            (sigma.loc[oldalt]**-1+(1.0/k)*(1+X1*np.exp((P_new.loc[alt]-P_new.loc[oldalt])/k))*(oldalt-alt))
             
             beta.loc[alt] = lrat.loc[alt]*sigma.loc[alt]**k
             oldalt = alt
@@ -402,9 +425,9 @@ if __name__ == '__main__':
     P_1 = addlayer(P_mol,layer,lrat_p)
     
     p_rangecor0 = pan.Series(P_mol.loc['vals'].values*(z**2),index=z)
-    p_norm0 = p_rangecor0/p_rangecor0[0]
+    p_norm0 = p_rangecor0/p_rangecor0.iloc[0]
     p_rangecor1 = pan.Series(P_1.loc['vals'].values*(z**2) ,index=z)  
-    p_norm1 = p_rangecor1/p_rangecor1[0]
+    p_norm1 = p_rangecor1/p_rangecor1.iloc[0]
     
     p_noisy = ptools.backandnoise(p_norm1)
     
